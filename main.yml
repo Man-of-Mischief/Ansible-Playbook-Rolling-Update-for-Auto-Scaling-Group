@@ -42,7 +42,7 @@
       - httpd
       - git
       - php
-    repo_url: "https://github.com/Man-of-Mischief/aws-elb-site.git"
+    repo_url: "use your repo url where website files are saved"
   serial: 1
   tasks:
  
@@ -107,3 +107,4 @@
       when: clone_status.changed == true
       wait_for:
         timeout: 30
+        
