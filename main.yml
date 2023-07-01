@@ -1,0 +1,109 @@
+---
+- name: "Creating Dynamic Inventory"
+  hosts: localhost
+  vars:
+    region: "ap-south-1"
+  vars_files:
+    - keys.yml
+  tasks:
+ 
+    - name: "Gathering ec2 instances info"
+      amazon.aws.ec2_instance_info:
+        region: "{{ region }}"
+        access_key: "{{ access_key }}"
+        secret_key: "{{ secret_key }}"
+        filters:
+          "tag:aws:autoscaling:groupName": "shopping-asg"
+          "tag:Name": "shopping-app"
+          "tag:project": "shopping"
+          "tag:env": "dev"
+      register: shopping_info
+ 
+    - name: "Creating Inventory"
+      add_host:
+        groups: "shopping_servers"
+        hostname: "{{ item.private_ip_address }}"
+        ansible_ssh_user: "ec2-user"
+        ansible_ssh_host: "{{ item.private_ip_address }}"
+        ansible_ssh_port: "22"
+        ansible_ssh_private_key_file: "aws.pem"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      with_items: "{{ shopping_info.instances }}"
+ 
+- name: "Deploying Repo Updates"
+  hosts: shopping_servers
+  become: yes
+  vars:
+    hostname: shopping.nidhin.co.in
+    httpd_port: "80"
+    owner: "apache"
+    group: "apache"
+    packages:
+      - httpd
+      - git
+      - php
+    repo_url: "https://github.com/Man-of-Mischief/aws-elb-site.git"
+  serial: 1
+  tasks:
+ 
+    - name: "Installing Packages"
+      yum:
+        name: "{{ packages }}"
+        state: present
+ 
+    - name: "Creating httpd.conf from httpd.conf.tmpl"
+      template:
+        src: ./httpd.conf.tmpl
+        dest: /etc/httpd/conf/httpd.conf
+ 
+    - name: "Creating VirtualHost"
+      template:
+        src: ./virtualhost.conf.tmpl
+        dest: /etc/httpd/conf.d/default.conf
+        owner: "{{ owner }}"
+        group: "{{ group }}"
+      register: vhost_status
+ 
+    - name: "Creating Docroot for VirtualHost"
+      file:
+        path: "/var/www/html/default/"
+        state: directory
+        owner: "{{ owner }}"
+        group: "{{ group }}"
+ 
+    - name: "Cloning from repo"
+      git:
+        repo: "{{ repo_url }}"
+        dest: /var/website/
+      register: clone_status
+ 
+    - name: "detaching from load balancer"
+      when: clone_status.changed == true
+      service:
+        name: httpd
+        state: stopped
+ 
+    - name: "Waiting for back to service"
+      when: clone_status.changed == true
+      wait_for:
+        timeout: 30
+ 
+ 
+    - name: "Copying contents to VirtualHost Docroot"
+      when: clone_status.changed == true
+      copy:
+        src: /var/website/
+        dest: /var/www/html/default/
+        owner: "{{ owner }}"
+        group: "{{ group }}"
+        remote_src: true
+ 
+    - name: "Starting apache/ attaching to load balancer"
+      service:
+        name: httpd
+        state: started
+ 
+    - name: "Waiting for back to service"
+      when: clone_status.changed == true
+      wait_for:
+        timeout: 30
